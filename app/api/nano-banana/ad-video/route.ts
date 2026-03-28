@@ -30,9 +30,20 @@ export async function POST(request: Request) {
       operation = await ai.operations.getVideosOperation({ operation });
     }
 
-    const responseData = operation.response ?? operation.result;
-    const generatedVideo =
-      responseData?.generatedVideos?.[0] ?? responseData?.generated_videos?.[0];
+    // Replace lines 33-35 with this:
+if (operation.error) {
+  throw new Error(`Google AI Generation Error: ${operation.error.message}`);
+}
+
+const responseData = operation.response; 
+
+// Veo 3.1 uses 'generatedVideos' (plural) in the response object
+const generatedVideo = responseData?.generatedVideos?.[0];
+
+if (!generatedVideo) {
+  console.log("Full Operation Object:", JSON.stringify(operation, null, 2)); // Debugging
+  throw new Error("Model finished but no video data was found in the response.");
+}
 
     if (!generatedVideo?.video?.uri) {
       throw new Error("Model finished but no video URI was found.");

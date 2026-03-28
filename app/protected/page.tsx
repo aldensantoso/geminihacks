@@ -6,6 +6,7 @@ import { InfoIcon, ShieldCheck } from "lucide-react";
 import Link from "next/link";
 import { Button } from "@/components/ui/button";
 import { ChatPlayground } from "@/components/chat-playground";
+import { JingleGenerator } from "@/components/jingle-generator";
 
 async function UserDetails() {
   const supabase = await createClient();
@@ -51,7 +52,14 @@ export default function ProtectedPage() {
         </div>
       </div>
 
-      <ChatPlayground />
+      <div className="grid gap-8 lg:grid-cols-2">
+        <div>
+          <ChatPlayground />
+        </div>
+        <div>
+          <JingleGenerator />
+        </div>
+      </div>
     </div>
   );
 }
