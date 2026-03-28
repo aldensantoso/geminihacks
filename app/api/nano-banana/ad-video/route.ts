@@ -1,65 +1,72 @@
 import { NextResponse } from "next/server";
 import { GoogleGenAI } from "@google/genai";
 
-const wait = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
-
-function buildVideoPrompt(adText: string, productName: string) {
-  const cleanText = adText?.trim() || "High-conversion ad for the product.";
-  const safeProduct = productName?.trim() || "the product";
-  return [
-    `Create a 30-second, energetic product ad video for ${safeProduct}.`,
-    "Use a vertical 9:16 format, crisp lighting, and clear focal framing.",
-    "Prioritize pacing that matches social feed swipes (fast hook, product showcase, CTA).",
-    "Base visuals on this ad copy: ",
-    cleanText,
-  ].join(" ");
-}
+const GEMINI_API_KEY = process.env.GEMINI_API_KEY ?? process.env.NEXT_PUBLIC_GEMINI_API_KEY;
+export const maxDuration = 300;
 
 export async function POST(request: Request) {
-  if (!process.env.GEMINI_API_KEY) {
-    return NextResponse.json({ error: "GEMINI_API_KEY is not set." }, { status: 500 });
-  }
+  if (!GEMINI_API_KEY)
+    return NextResponse.json({ error: "No API Key" }, { status: 500 });
 
   try {
-    const { adText = "", productName = "Nano Banana product" } = await request.json();
+    const { prompt, previousVideo } = await request.json();
+    const ai = new GoogleGenAI({ apiKey: GEMINI_API_KEY });
 
-    if (!adText.trim()) {
-      return NextResponse.json({ error: "adText is required" }, { status: 400 });
-    }
-
-    const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY });
-    const prompt = buildVideoPrompt(adText, productName);
-
-    let operation: any = await ai.models.generateVideos({
-      model: "veo-3.1-generate-preview",
+    // 1. Start generation or extension
+    let operation = await ai.models.generateVideos({
+      model: "veo-3.1-fast-generate-preview",
       prompt,
+      video: previousVideo || undefined,
       config: {
-        aspectRatio: "9:16",
-        resolution: "1080p",
-        durationSeconds: 30,
+        aspectRatio: previousVideo ? undefined : "9:16",
+        resolution: "720p",
       },
     });
 
-    let attempts = 0;
-    const maxAttempts = 6; // ~60s max wait
-
-    while (!operation?.done && attempts < maxAttempts) {
-      await wait(10000);
+    // 2. Poll until finished
+    while (!operation.done) {
+      console.log("Rendering video...");
+      await new Promise((resolve) => setTimeout(resolve, 10000));
       operation = await ai.operations.getVideosOperation({ operation });
-      attempts += 1;
     }
 
-    const videoFile = operation?.response?.generatedVideos?.[0]?.video ?? null;
-    const videoUri: string | null = null; // Library does not expose a getFile helper; return file id for client follow-up.
+    const responseData = operation.response ?? operation.result;
+    const generatedVideo =
+      responseData?.generatedVideos?.[0] ?? responseData?.generated_videos?.[0];
 
-    return NextResponse.json({
-      status: operation?.done ? "ready" : "pending",
-      videoFile,
-      videoUri,
-      prompt,
-      attempts,
+    if (!generatedVideo?.video?.uri) {
+      throw new Error("Model finished but no video URI was found.");
+    }
+
+    const { uri, mimeType } = generatedVideo.video;
+
+    // 3. Fetch the video directly — this gives us a real ReadableStream
+    //    The SDK key is passed as a query param (Google Files API format)
+    const videoResponse = await fetch(`${uri}&key=${GEMINI_API_KEY}`);
+
+    if (!videoResponse.ok) {
+      const errText = await videoResponse.text();
+      throw new Error(`Video fetch failed (${videoResponse.status}): ${errText}`);
+    }
+
+    if (!videoResponse.body) {
+      throw new Error("Video response had no readable body.");
+    }
+
+    // 4. Pipe the stream straight to the client — no buffering, no memory spike
+    return new Response(videoResponse.body, {
+      status: 200,
+      headers: {
+        "Content-Type": mimeType ?? "video/mp4",
+        "Content-Disposition": 'attachment; filename="generated_video.mp4"',
+        // Forward content-length if Google sends it, so browsers show progress
+        ...(videoResponse.headers.get("content-length")
+          ? { "Content-Length": videoResponse.headers.get("content-length")! }
+          : {}),
+      },
     });
-  } catch (error) {
-    return NextResponse.json({ error: "Failed to generate ad video." }, { status: 500 });
+  } catch (error: any) {
+    console.error("Veo Error:", error);
+    return NextResponse.json({ error: error.message }, { status: 500 });
   }
 }

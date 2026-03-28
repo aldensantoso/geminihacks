@@ -82,6 +82,7 @@ export function ChatPlayground() {
   const scrollerRef = useRef<HTMLDivElement | null>(null);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
   const attachmentsRef = useRef<Attachment[]>([]);
+  const adVideoUriRef = useRef<string | null>(null);
 
   const timeFormatter = useMemo(
     () =>
@@ -113,15 +114,29 @@ export function ChatPlayground() {
 
   useEffect(() => {
     return () => {
-      attachmentsRef.current.forEach((item) =>
-        URL.revokeObjectURL(item.preview),
-      );
+      attachmentsRef.current.forEach((item) => URL.revokeObjectURL(item.preview));
     };
   }, []);
+
+  useEffect(() => {
+    const previousUri = adVideoUriRef.current;
+    if (previousUri && previousUri !== adVideo?.uri) {
+      URL.revokeObjectURL(previousUri);
+    }
+
+    adVideoUriRef.current = adVideo?.uri ?? null;
+
+    return () => {
+      if (adVideoUriRef.current) {
+        URL.revokeObjectURL(adVideoUriRef.current);
+      }
+    };
+  }, [adVideo?.uri]);
 
   const generateAd = useCallback(
     async (notes?: string) => {
       if (favorites.length === 0) return;
+      if (adVideo?.status === "pending") return;
       try {
         setIsGeneratingAd(true);
         setAdVideo(null);
@@ -136,7 +151,27 @@ export function ChatPlayground() {
           }),
         });
 
-        if (!response.ok) throw new Error("Ad generation failed");
+        if (!response.ok) {
+          let detail = "Ad generation failed";
+          try {
+            const errBody = await response.json();
+            if (errBody?.error) detail = errBody.error;
+          } catch (_) {
+            // ignore parse errors
+          }
+          setAdCopy(detail); // stop auto-retry loop and surface state
+          setMessages((prev) => [
+            ...prev,
+            {
+              id: nextId(),
+              role: "assistant",
+              text: detail,
+              images: [],
+              timestamp: nextTimestamp(),
+            },
+          ]);
+          return;
+        }
 
         const payload = await response.json();
         setAdCopy(payload.text ?? "");
@@ -152,120 +187,73 @@ export function ChatPlayground() {
           },
         ]);
 
-        // Trigger video ad generation via VEO
+        // Trigger video ad generation via VEO using the ad draft as the master prompt
         try {
+          const masterPrompt = payload.text
+            ? `High-energy 9:16 product ad, upbeat electronic bed. Use this script: ${payload.text}`
+            : "High-energy 9:16 product ad, upbeat electronic bed.";
+
           const videoResponse = await fetch("/api/nano-banana/ad-video", {
             method: "POST",
             headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({
-              adText: payload.text ?? "",
-              productName: lastPromptRef.current || "Product",
-            }),
+            body: JSON.stringify({ prompt: masterPrompt }),
           });
 
           if (videoResponse.ok) {
-            const videoPayload = await videoResponse.json();
-            setAdVideo({
-              uri: videoPayload.videoUri ?? null,
-              file: videoPayload.videoFile ?? null,
-              status: videoPayload.status ?? null,
-            });
+            const videoBlob = await videoResponse.blob();
+            const url = URL.createObjectURL(videoBlob);
+            setAdVideo({ uri: url, file: null, status: "ready" });
 
             setMessages((prev) => [
               ...prev,
               {
                 id: nextId(),
                 role: "assistant",
-                text:
-                  videoPayload.status === "ready" && videoPayload.videoUri
-                    ? "Ad video ready to preview."
-                    : "Ad video requested (processing)…",
+                text: "Ad video ready to preview.",
                 images: [],
                 timestamp: nextTimestamp(),
               },
             ]);
           } else {
+            let videoDetail = "Could not generate ad video right now.";
+            try {
+              const errBody = await videoResponse.json();
+              if (errBody?.error) videoDetail = String(errBody.error);
+            } catch (_) {
+              // ignore
+            }
             setMessages((prev) => [
               ...prev,
               {
                 id: nextId(),
                 role: "assistant",
-                text: "Could not generate ad video right now.",
+                text: videoDetail,
                 images: [],
                 timestamp: nextTimestamp(),
               },
             ]);
           }
         } catch (videoError) {
+          const message = videoError instanceof Error ? videoError.message : "Ad video request failed.";
           setMessages((prev) => [
             ...prev,
             {
               id: nextId(),
               role: "assistant",
-              text: "Ad video request failed.",
+              text: `Ad video request failed: ${message}`,
               images: [],
               timestamp: nextTimestamp(),
             },
           ]);
         }
 
-        // Trigger audio bed generation via Lyria
-        try {
-          const audioResponse = await fetch("/api/nano-banana/ad-audio", {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({
-              adText: payload.text ?? "",
-              productName: lastPromptRef.current || "Product",
-              notes: notes ?? lastPromptRef.current,
-            }),
-          });
-
-          if (audioResponse.ok) {
-            const audioPayload = await audioResponse.json();
-            if (audioPayload.audioBase64) {
-              const audioUrl = `data:${audioPayload.mimeType};base64,${audioPayload.audioBase64}`;
-              setAdAudio({ url: audioUrl, mimeType: audioPayload.mimeType, text: audioPayload.text });
-              setMessages((prev) => [
-                ...prev,
-                {
-                  id: nextId(),
-                  role: "assistant",
-                  text: "Ad music bed ready (clean, no competing SFX).",
-                  images: [],
-                  timestamp: nextTimestamp(),
-                },
-              ]);
-            } else {
-              setMessages((prev) => [
-                ...prev,
-                {
-                  id: nextId(),
-                  role: "assistant",
-                  text: "Could not render ad music bed right now.",
-                  images: [],
-                  timestamp: nextTimestamp(),
-                },
-              ]);
-            }
-          }
-        } catch (audioError) {
-          setMessages((prev) => [
-            ...prev,
-            {
-              id: nextId(),
-              role: "assistant",
-              text: "Ad music request failed.",
-              images: [],
-              timestamp: nextTimestamp(),
-            },
-          ]);
-        }
+        // Temporarily disable audio bed (Lyria) to return video immediately.
+        return;
       } finally {
         setIsGeneratingAd(false);
       }
     },
-    [favorites, nextId, nextTimestamp],
+    [adVideo, favorites, nextId, nextTimestamp],
   );
 
   const generateSeo = useCallback(
@@ -306,9 +294,6 @@ export function ChatPlayground() {
   );
 
   useEffect(() => {
-    if (stage === "ad" && favorites.length > 0 && !adCopy && !isGeneratingAd) {
-      generateAd();
-    }
     if (stage === "seo" && favorites.length > 0 && adCopy && !seoKeywords && !isGeneratingSeo) {
       generateSeo();
     }
@@ -376,13 +361,13 @@ export function ChatPlayground() {
         });
 
       if (shouldGeneratePhotos) {
-          if (photoGenCountRef.current >= 5) {
+          if (photoGenCountRef.current >= 3) {
             setMessages((prev) => [
               ...prev,
               {
                 id: nextId(),
                 role: "assistant",
-                text: "Photo limit reached (5). Select favorites or finalize.",
+                text: "Photo limit reached (3). Select favorites or finalize.",
                 images: [],
                 timestamp: nextTimestamp(),
               },
@@ -526,7 +511,7 @@ export function ChatPlayground() {
   };
 
   const placeholderByStage: Record<Stage, string> = {
-    photo: "Describe the photoshoot scene and drop product shots (limit 5 generations)",
+    photo: "Describe the photoshoot scene and drop product shots (limit 3 generations)",
     ad: "Add a short tweak for the ad (optional)",
     seo: "Add context for SEO keywords (optional)",
     saved: "All done",
@@ -583,7 +568,7 @@ export function ChatPlayground() {
                 );
               })}
               <div className="ml-auto text-[11px] text-muted-foreground text-right">
-                <div>Photo gens: {photoGenCountRef.current}/5</div>
+                <div>Photo gens: {photoGenCountRef.current}/3</div>
                 <div>Favorites saved for ad/SEO: {favorites.length}/5</div>
               </div>
             </div>
@@ -831,10 +816,14 @@ export function ChatPlayground() {
                       type="button"
                       size="sm"
                       variant="outline"
-                      disabled={favorites.length === 0 || isGeneratingAd}
+                      disabled={favorites.length === 0 || isGeneratingAd || adVideo?.status === "pending"}
                       onClick={() => generateAd(input.trim() || undefined)}
                     >
-                      {isGeneratingAd ? "Generating ad…" : "Regenerate ad"}
+                      {isGeneratingAd
+                        ? "Generating ad…"
+                        : adVideo?.status === "pending"
+                          ? "Ad video pending"
+                          : "Regenerate ad"}
                     </Button>
                   )}
                   {stage === "seo" && (
@@ -888,7 +877,7 @@ export function ChatPlayground() {
               <div className="rounded-xl border border-border/60 bg-card/70 p-3">
                 <div className="flex items-center justify-between text-xs uppercase tracking-wide text-muted-foreground">
                   <span>Ad music (clean bed)</span>
-                  <span className="text-[11px] text-muted-foreground">30s</span>
+                  <span className="text-[11px] text-muted-foreground">15s</span>
                 </div>
                 <audio className="mt-2 w-full" controls src={adAudio.url} />
                 {adAudio.text && (
@@ -902,13 +891,25 @@ export function ChatPlayground() {
                   <span>Ad video</span>
                   <span className="text-[11px] font-semibold text-primary">{adVideo.status ?? "pending"}</span>
                 </div>
-                {adVideo.uri ? (
-                  <video
-                    className="mt-2 w-full rounded-lg border border-border/60"
-                    src={adVideo.uri}
-                    controls
-                    playsInline
-                  />
+                {adVideo.status === "ready" && adVideo.uri ? (
+                  <div className="mt-3 flex flex-col items-center gap-2">
+                    <div className="relative aspect-[9/16] w-full max-w-[280px] overflow-hidden rounded-2xl border-2 border-primary/20 bg-black shadow-xl">
+                      <video
+                        src={adVideo.uri}
+                        controls
+                        autoPlay
+                        playsInline
+                        className="h-full w-full object-cover"
+                      />
+                    </div>
+                    <a
+                      href={adVideo.uri}
+                      download="ad-video.mp4"
+                      className="flex items-center gap-2 text-xs font-medium text-primary hover:underline"
+                    >
+                      Download MP4
+                    </a>
+                  </div>
                 ) : (
                   <p className="mt-2 text-sm text-muted-foreground">
                     Video is processing{adVideo.file ? ` (file: ${adVideo.file})` : "."}

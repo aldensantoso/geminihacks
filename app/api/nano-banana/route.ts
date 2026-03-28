@@ -1,6 +1,8 @@
 import { NextResponse } from "next/server";
 import { GoogleGenAI } from "@google/genai";
 
+const GEMINI_API_KEY = process.env.GEMINI_API_KEY ?? process.env.NEXT_PUBLIC_GEMINI_API_KEY;
+
 const VARIATION_STYLES = [
   "Studio hero on seamless light gray with soft wrap lighting and a crisp shadow.",
   "Lifestyle on warm wood with diffused window light and a blurred loft backdrop.",
@@ -8,6 +10,8 @@ const VARIATION_STYLES = [
   "Top-down on textured stone with minimal propping and controlled shadows.",
   "Moody close-up with dark backdrop, edge lighting, and glossy highlights.",
 ];
+
+const MAX_VARIATIONS = 3;
 
 function buildContextPrompt(productName: string, notes?: string) {
   const safeName = productName?.trim() || "Nano Banana product";
@@ -29,7 +33,7 @@ function buildContextPrompt(productName: string, notes?: string) {
 }
 
 export async function POST(request: Request) {
-  if (!process.env.GEMINI_API_KEY) {
+  if (!GEMINI_API_KEY) {
     return NextResponse.json({ error: "GEMINI_API_KEY is not set." }, { status: 500 });
   }
 
@@ -46,7 +50,7 @@ export async function POST(request: Request) {
       return NextResponse.json({ error: "imageBase64 is required." }, { status: 400 });
     }
 
-    const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY });
+    const ai = new GoogleGenAI({ apiKey: GEMINI_API_KEY });
     const prompt = buildContextPrompt(productName, notes);
     const cleanBase64 = typeof imageBase64 === "string" && imageBase64.includes(",")
       ? imageBase64.split(",").pop() ?? ""
@@ -55,7 +59,7 @@ export async function POST(request: Request) {
     const images: string[] = [];
     const contexts: string[] = [];
 
-    for (let i = 0; i < 5; i += 1) {
+    for (let i = 0; i < MAX_VARIATIONS; i += 1) {
       const style = VARIATION_STYLES[Math.abs(styleIndex + i) % VARIATION_STYLES.length];
       const scenePrompt = `${prompt} Scene: ${style}`;
 

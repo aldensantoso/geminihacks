@@ -1,5 +1,7 @@
+
 import { AuthButton } from "@/components/auth-button";
 import { EnvVarWarning } from "@/components/env-var-warning";
+import { InlineVeoPlayer } from "@/components/inline-veo";
 import { ThemeSwitcher } from "@/components/theme-switcher";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -80,6 +82,9 @@ export default function Home() {
               </div>
 
               <div className="relative grid gap-3">
+                <Suspense fallback={null}>
+                  <InlineVeoPlayer />
+                </Suspense>
                 {[{
                   title: "Creation rails",
                   desc: "Ad copy, photoshoot direction, and SEO keywording run in parallel.",
@@ -158,7 +163,7 @@ export default function Home() {
           </Card>
         </div>
 
-        <footer className="w-full flex items-center justify-center border-t mx-auto text-center text-xs gap-6 py-12">
+        <footer className="w-full flex itemscenter justify-center border-t mx-auto text-center text-xs gap-6 py-12">
           <p className="text-muted-foreground">Helio Studio · Built on Next + Supabase</p>
           <ThemeSwitcher />
         </footer>

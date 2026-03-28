@@ -1,6 +1,9 @@
 import { NextResponse } from "next/server";
 import { GoogleGenAI } from "@google/genai";
 
+const GEMINI_API_KEY = process.env.GEMINI_API_KEY ?? process.env.NEXT_PUBLIC_GEMINI_API_KEY;
+const MODEL_ID = "gemini-flash-latest";
+
 function dataUrlToInlineData(url: string) {
   const [meta, data] = url.split(",");
   if (!meta || !data) return null;
@@ -33,7 +36,7 @@ function buildPrompt(mode: "ad" | "seo", productName: string, notes?: string) {
 }
 
 export async function POST(request: Request) {
-  if (!process.env.GEMINI_API_KEY) {
+  if (!GEMINI_API_KEY) {
     return NextResponse.json({ error: "GEMINI_API_KEY is not set." }, { status: 500 });
   }
 
@@ -45,7 +48,7 @@ export async function POST(request: Request) {
       return NextResponse.json({ error: "images array is required" }, { status: 400 });
     }
 
-    const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY });
+    const ai = new GoogleGenAI({ apiKey: GEMINI_API_KEY });
     const prompt = buildPrompt(mode, productName, notes);
 
     const imageParts = images
@@ -54,7 +57,7 @@ export async function POST(request: Request) {
       .map((inline) => ({ inlineData: inline }));
 
     const response = await ai.models.generateContent({
-      model: "gemini-1.5-flash",
+      model: MODEL_ID,
       // Cast contents to the expected shape; inlineData parts are built above.
       contents: [
         {
@@ -69,6 +72,7 @@ export async function POST(request: Request) {
 
     return NextResponse.json({ text, prompt });
   } catch (error) {
-    return NextResponse.json({ error: "Failed to generate copy." }, { status: 500 });
+    const message = error instanceof Error ? error.message : "Failed to generate copy.";
+    return NextResponse.json({ error: `Failed to generate copy: ${message}` }, { status: 500 });
   }
 }
